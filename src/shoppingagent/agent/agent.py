@@ -1,6 +1,7 @@
 from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
+from langchain.agents.middleware import SummarizationMiddleware, HumanInTheLoopMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from dotenv import load_dotenv
 import uuid
 
@@ -17,7 +18,6 @@ IMPORTANT — grounding rules:
 - If the user asks for more detail than what the tool returned, say plainly that no further details are available, rather than guessing.
 
 Always search for a product first if you don't already know its exact product_id.
-Never call checkout unless the user has clearly confirmed they want to complete the purchase.
 Be concise and friendly in your replies."""
 
 checkpointer = InMemorySaver()
@@ -29,9 +29,16 @@ agent = create_agent(
     checkpointer=checkpointer,
     middleware=[
         SummarizationMiddleware(
-            model="groq:openai/gpt-oss-120b",  # a cheaper/smaller model is common here in production
-            trigger=("tokens", 3000),               # summarize once history exceeds ~3000 tokens
-            keep=("messages", 10),                  # always keep the last 10 messages word-for-word
+            model="groq:openai/gpt-oss-120b",
+            trigger=("tokens", 3000),
+            keep=("messages", 10),
+        ),
+        HumanInTheLoopMiddleware(
+            interrupt_on={
+                "checkout_tool": True,       # requires approval — spends money, irreversible
+                "add_to_cart_tool": False,   # safe, reversible, auto-approved
+                "search_products_tool": False,  # read-only, auto-approved
+            },
         ),
     ],
 )
@@ -39,8 +46,6 @@ agent = create_agent(
 
 if __name__ == "__main__":
     print("Shopping agent ready. Type 'exit' to quit.\n")
-
-    # One thread_id per running session — every message in this run shares memory
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     while True:
@@ -52,4 +57,24 @@ if __name__ == "__main__":
             {"messages": [{"role": "user", "content": user_input}]},
             config=config,
         )
+
+        # Check if the agent paused, waiting for approval
+        if "__interrupt__" in result:
+            interrupt_data = result["__interrupt__"][0].value
+            action = interrupt_data["action_requests"][0]
+            print(f"\nApproval needed: {action['name']} with args {action['args']}")
+
+            decision = input("Approve this checkout? (yes/no): ").strip().lower()
+
+            if decision == "yes":
+                result = agent.invoke(
+                    Command(resume={"decisions": [{"type": "approve"}]}),
+                    config=config,
+                )
+            else:
+                result = agent.invoke(
+                    Command(resume={"decisions": [{"type": "reject", "message": "User declined checkout."}]}),
+                    config=config,
+                )
+
         print("Agent:", result["messages"][-1].content, "\n")
