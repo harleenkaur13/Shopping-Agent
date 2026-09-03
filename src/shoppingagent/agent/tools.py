@@ -17,10 +17,10 @@ def search_products_tool(query: str) -> str:
         return f"No products found matching '{query}'."
 
     lines = [
-        f"id={p.id} | {p.name} | ${p.price} | rating {p.avg_rating}"
+        f"id={p.id} | {p.name} | ${p.price} | rating {p.avg_rating} | description: {p.description}"
         for p in results
     ]
-    return "\n".join(lines)
+    return "This is the complete and only information available for these products:\n" + "\n".join(lines)
 
 
 @tool
